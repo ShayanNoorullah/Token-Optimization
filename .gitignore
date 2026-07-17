@@ -1,0 +1,54 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Test / cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.cache/
+
+# Frontend (legacy React leftovers)
+frontend/node_modules/
+frontend/dist/
+frontend/package-lock.json
+frontend/package.json
+frontend/tsconfig.json
+frontend/tsconfig.tsbuildinfo
+frontend/vite.config.ts
+
+# Models & data
+models/
+docker-data/
+*.log
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Generated / local results (optional — keep logs_issue.txt tracked)
+logs_replay_results.json

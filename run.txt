@@ -1,0 +1,60 @@
+SETUP & RUN — Token Optimization
+================================
+
+NEED
+----
+- Docker Desktop (running)
+- Python 3.11+
+
+SETUP (once)
+------------
+1. Open terminal in this folder
+
+2. Start databases
+   docker compose up -d
+
+3. Create virtual environment
+   python -m venv .venv
+   .venv\Scripts\activate
+
+4. Install packages
+   pip install -r requirements.txt
+
+5. Copy settings
+   copy .env.example .env
+
+6. Download AI models (first time only — slow)
+   python -m scripts.warmup
+
+7. Create database tables
+   python -m scripts.init_db
+
+RUN
+---
+1. Activate environment
+   .venv\Scripts\activate
+
+2. Start the app
+   uvicorn app.main:app --host 127.0.0.1 --port 9200
+
+3. Open browser
+   http://127.0.0.1:9200/
+
+4. API docs (optional)
+   http://127.0.0.1:9200/docs
+
+TEST
+----
+pytest tests/ -v
+python -m scripts.smoke_test
+
+STOP
+----
+Ctrl+C in the terminal
+docker compose down
+
+NOTES
+-----
+- Keep LLM_MOCK=true in .env to run without Ollama
+- Use port 9200 if 8000 is blocked on Windows
+- See run.md for troubleshooting

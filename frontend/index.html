@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Token Context Tester</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="session-bar">
+      <div>
+        <h1>Token Context Tester</h1>
+        <p class="subtitle">Semantic memory retrieval dashboard</p>
+      </div>
+      <div class="session-info">
+        <span id="sessionEmail" class="badge">Not started</span>
+        <span id="sessionId" class="badge mono"></span>
+        <button id="newSessionBtn" class="btn-secondary" type="button">New Session</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <div class="left-col">
+        <section class="panel">
+          <h2>Conversation</h2>
+          <div id="turnsContainer" class="turns-container">
+            <p class="placeholder">Send a message to start testing.</p>
+          </div>
+
+          <div id="samplePrompts" class="sample-prompts"></div>
+
+          <form id="chatForm" class="input-row">
+            <input id="messageInput" type="text" placeholder="Type a message..." autocomplete="off" />
+            <button class="btn-primary" type="submit">Send</button>
+          </form>
+          <div id="errorBanner" class="error-banner hidden"></div>
+        </section>
+      </div>
+
+      <div class="right-col">
+        <section class="panel">
+          <h2>Per-Prompt Stats</h2>
+          <div id="statsPanel" class="placeholder">Stats appear after first response.</div>
+        </section>
+
+        <section class="panel">
+          <h2>Token Comparison</h2>
+          <div id="tokenChart" class="chart-panel placeholder">Chart appears after first response.</div>
+        </section>
+
+        <section class="panel">
+          <h2>Retrieved Memories</h2>
+          <div id="retrievalPanel" class="placeholder">No memories retrieved yet.</div>
+        </section>
+
+        <section class="panel">
+          <h2>User Facts</h2>
+          <div id="factsPanel" class="placeholder">No facts extracted yet.</div>
+        </section>
+
+        <section class="panel">
+          <h2>Global Metrics</h2>
+          <div id="metricsPanel" class="placeholder">Metrics load after first request.</div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

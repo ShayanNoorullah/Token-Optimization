@@ -1,0 +1,105 @@
+ARIA Conversation Log Issues
+==================================================
+
+This file lists problems found in the AIConversationLogs folder.
+These logs come from a similar AI chat system (ARIA / BullseyeEZ).
+Our token-efficient system is designed to fix these problems.
+
+1. Too many tokens per message
+------------------------------
+Most chats use 6133 to 62067 tokens per request. SQL questions spike to around 60,000 tokens. Our system targets 100-1,500 context tokens instead.
+
+2. One user question triggers multiple AI calls
+-----------------------------------------------
+2 of 7 conversations used more than one LLM call (InitialPrompt + SqlGeneration + FinalResponse). This triples cost and latency for a single user message.
+
+3. Same briefing asked repeatedly with no memory reuse
+------------------------------------------------------
+4 conversations are dashboard briefing requests. Each one resends the full context instead of reusing a stored summary.
+
+4. Huge log files from storing full API payloads
+------------------------------------------------
+Files over 50KB: AI_Conversation_Log_Detail_5_20260709_112123.xlsx, AI_Conversation_Log_Detail_7_20260709_112058.xlsx. Full Provider Request/Response JSON is stored, making logs hard to read and wasting storage.
+
+5. SQL query results dumped raw into AI context
+-----------------------------------------------
+2 conversations ran SQL tools returning 16-60 rows of data directly into the prompt. Large tabular data inflates tokens fast.
+
+6. AI answered before data was ready
+------------------------------------
+In Detail 7, the dashboard was still showing 'Processing...' but the AI still generated a full briefing. Responses can be based on empty or stale data.
+
+7. Slow responses on heavy queries
+----------------------------------
+SQL-heavy conversations (Detail 4: ~59K tokens, Detail 6: ~62K tokens) take much longer than text-only briefings (~6K tokens).
+
+8. No selective memory retrieval
+--------------------------------
+Every call appears to resend the entire conversation context. There is no evidence of semantic retrieval or summarization to cut token use.
+
+9. Questionable or confusing metrics in responses
+-------------------------------------------------
+Some responses report metrics over 100% (e.g. lock rate 124.19%). This suggests context confusion, bad data, or hallucination.
+
+Evidence Summary
+==================================================
+
+File: AI_Conversation_Log_Detail_1_20260709_112213.xlsx
+  Prompt: BRIEFING: Analyze the attached dashboard snapshot and summarize the most important visible insights....
+  Total tokens: 6406
+  LLM calls: 0
+  SQL tools: 0
+  Response time: 18587 ms
+
+File: AI_Conversation_Log_Detail_2_20260709_112205.xlsx
+  Prompt: What's the biggest lever to move next month's number?...
+  Total tokens: 8044
+  LLM calls: 0
+  SQL tools: 0
+  Response time: 9435 ms
+
+File: AI_Conversation_Log_Detail_3_20260709_112155.xlsx
+  Prompt: BRIEFING: Analyze the attached dashboard snapshot and summarize the most important visible insights....
+  Total tokens: 6423
+  LLM calls: 1
+  SQL tools: 0
+  Response time: 11460 ms
+
+File: AI_Conversation_Log_Detail_4_20260709_112138.xlsx
+  Prompt: Rank all branches — explain the bottom two....
+  Total tokens: 58942
+  LLM calls: 3
+  SQL tools: 3
+  Response time: 20118 ms
+
+File: AI_Conversation_Log_Detail_5_20260709_112123.xlsx
+  Prompt: BRIEFING: Analyze the attached dashboard snapshot and summarize the most important visible insights....
+  Total tokens: 6404
+  LLM calls: 1
+  SQL tools: 0
+  Response time: 11146 ms
+
+File: AI_Conversation_Log_Detail_6_20260709_112112.xlsx
+  Prompt: Who is underperforming vs their potential?...
+  Total tokens: 62067
+  LLM calls: 3
+  SQL tools: 3
+  Response time: 33123 ms
+
+File: AI_Conversation_Log_Detail_7_20260709_112058.xlsx
+  Prompt: BRIEFING: Analyze the attached dashboard snapshot and summarize the most important visible insights....
+  Total tokens: 6133
+  LLM calls: 1
+  SQL tools: 0
+  Response time: 9189 ms
+
+Summary Index (all conversations)
+----------------------------------------
+
+  1. 6133 tokens | 9189 ms | BRIEFING: Analyze the attached dashboard snapshot and summarize the most importa...
+  2. 62067 tokens | 33123 ms | Who is underperforming vs their potential?...
+  3. 6404 tokens | 11146 ms | BRIEFING: Analyze the attached dashboard snapshot and summarize the most importa...
+  4. 58942 tokens | 20118 ms | Rank all branches — explain the bottom two....
+  5. 6423 tokens | 11460 ms | BRIEFING: Analyze the attached dashboard snapshot and summarize the most importa...
+  6. 8044 tokens | 9435 ms | What's the biggest lever to move next month's number?...
+  7. 6406 tokens | 18587 ms | BRIEFING: Analyze the attached dashboard snapshot and summarize the most importa...
