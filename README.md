@@ -17,6 +17,7 @@ Python · FastAPI · PostgreSQL · Qdrant · BGE embeddings · Vanilla HTML/CSS/
 ## Quick start
 
 See **[run.txt](run.txt)** for the shortest setup steps.
+Full guide: [run.md](run.md).
 
 ```bash
 docker compose up -d
