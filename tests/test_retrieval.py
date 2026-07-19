@@ -43,6 +43,8 @@ def test_temporal_decay():
     retriever = HybridRetriever()
     retriever.embedding = FakeEmbeddingService()
 
+    # ~1 year old; with λ=0.01 this should clearly reduce the score.
+    one_year_ago = int(__import__("time").time()) - 365 * 86400
     candidates = [
         SearchResult(
             chunk_id=uuid.uuid4(),
@@ -51,11 +53,12 @@ def test_temporal_decay():
             memory_type="turn_pair",
             session_id=None,
             importance=0.5,
-            timestamp=0,
+            timestamp=one_year_ago,
         )
     ]
     decayed = retriever._apply_temporal_decay(candidates)
     assert decayed[0].score < 0.9
+    assert decayed[0].score > 0.0
 
 
 def test_cosine_similarity():

@@ -175,15 +175,18 @@ function renderRetrieval(stats) {
     el.innerHTML = `<p class="placeholder">No memories above threshold (${stats?.retrieval_threshold ?? 0.72}).</p>`;
     return;
   }
-  el.innerHTML = `<div class="memory-list">${stats.retrieved_memories.map(m => `
+  el.innerHTML = `<div class="memory-list">${stats.retrieved_memories.map(m => {
+    const passes = m.score >= stats.retrieval_threshold;
+    const scoreLabel = passes ? m.score.toFixed(4) : `${m.score.toFixed(4)} · fallback`;
+    return `
     <div class="memory-card">
       <div class="memory-header">
         <span class="memory-type">${escapeHtml(m.memory_type)}</span>
-        <span class="memory-score ${m.score >= stats.retrieval_threshold ? "pass" : "fail"}">${m.score.toFixed(4)}</span>
+        <span class="memory-score ${passes ? "pass" : "fail"}" title="${passes ? "Above similarity threshold" : "Below threshold; kept for same-session continuity"}">${scoreLabel}</span>
       </div>
       <div class="memory-content">${escapeHtml(m.content)}</div>
-    </div>
-  `).join("")}</div>`;
+    </div>`;
+  }).join("")}</div>`;
 }
 
 function renderFacts(facts) {

@@ -39,6 +39,7 @@ class HybridRetriever:
 
         reranker = self._get_reranker()
         pairs = [[query, c.content] for c in candidates]
+        # sentence-transformers CrossEncoder already maps BGE scores to ~[0, 1].
         scores = reranker.predict(pairs)
 
         reranked = []
@@ -61,9 +62,12 @@ class HybridRetriever:
         now = datetime.now(timezone.utc).timestamp()
         decayed = []
         for c in candidates:
-            age_days = max(0, (now - c.timestamp) / 86400) if c.timestamp else 0
+            age_days = max(0, (now - c.timestamp) / 86400) if c.timestamp is not None else 0
             decay_factor = math.exp(-self.settings.temporal_decay_lambda * age_days)
-            adjusted_score = c.score * decay_factor * (0.5 + 0.5 * c.importance)
+            # Importance is centered at 0.5 (neutral). Older formula (0.5+0.5*imp)
+            # halved default scores and made the 0.72 threshold almost unreachable.
+            importance_factor = 1.0 + 0.25 * (c.importance - 0.5)
+            adjusted_score = c.score * decay_factor * importance_factor
             decayed.append(
                 SearchResult(
                     chunk_id=c.chunk_id,
@@ -173,8 +177,9 @@ class HybridRetriever:
         if not candidates:
             return []
 
-        candidates = self._apply_temporal_decay(candidates)
+        # Rerank first (logits → probabilities), then apply temporal decay.
         candidates = await run_sync(self._rerank_sync, query, candidates)
+        candidates = self._apply_temporal_decay(candidates)
 
         filtered = [
             c for c in candidates if c.score >= self.settings.similarity_threshold

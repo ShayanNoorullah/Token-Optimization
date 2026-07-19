@@ -5,102 +5,116 @@ Technical documentation for the Token-Efficient Context Management System.
 ## System Architecture
 
 ```
-┌─────────────┐     ┌──────────────────────────────────────────────────┐
-│  Frontend   │────▶│              FastAPI Gateway                     │
-│  (React)    │     │  /chat  /users  /sessions  /metrics              │
-└─────────────┘     └──────┬───────────────────────────┬─────────────┘
-                             │                           │
-                    ┌────────▼────────┐         ┌────────▼────────┐
-                    │   PostgreSQL    │         │     Qdrant      │
-                    │  messages       │         │  vector search  │
-                    │  summaries      │         │  768-dim cosine │
-                    │  facts          │         └─────────────────┘
-                    │  memory_chunks  │
-                    │  token_logs     │
-                    └─────────────────┘
+┌──────────────────┐     ┌──────────────────────────────────────────────────┐
+│  Frontend        │────▶│              FastAPI Gateway                     │
+│  (vanilla JS)    │     │  /chat  /users  /sessions  /metrics              │
+│  served at /     │     │  StaticFiles → frontend/                         │
+└──────────────────┘     └──────┬───────────────────────────┬─────────────┘
+                               │                           │
+                      ┌────────▼────────┐         ┌────────▼────────┐
+                      │   PostgreSQL    │         │     Qdrant      │
+                      │  messages       │         │  vector search  │
+                      │  summaries      │         │  768-dim cosine │
+                      │  facts          │         └─────────────────┘
+                      │  memory_chunks  │
+                      │  token_logs     │
+                      └─────────────────┘
 ```
+
+See also: ![architecture diagram](docs/images/architecture.png)
 
 ## Request Lifecycle
 
-1. **User sends message** → saved to PostgreSQL, appended to short-term buffer
-2. **Query embedding** generated (BGE-base with query prefix)
-3. **Vector search** in Qdrant (top-20 candidates, filtered by user_id)
-4. **Rerank** with BGE-reranker cross-encoder
-5. **Filter** by similarity threshold (≥ 0.72)
-6. **Deduplicate** near-identical chunks (> 0.95 similarity)
-7. **MMR select** top-3 diverse results
-8. **Fetch** session summary + user facts from PostgreSQL
-9. **Build context** within token budget (4096 total)
-10. **Call LLM** with assembled system prompt + user message
-11. **Log** token usage and retrieval audit trail
-12. **Async post-processing**: embed turn-pair, extract facts, check summarization
+1. **User sends message** → saved to PostgreSQL, available in short-term buffer  
+2. **Query embedding** generated (BGE-base with query prefix)  
+3. **Vector search** in Qdrant (top-20 candidates, filtered by `user_id`)  
+4. **Rerank** with BGE-reranker CrossEncoder (scores already ~[0, 1] via Sigmoid)  
+5. **Temporal decay** `exp(-λ · age_days)` × importance  
+6. **Filter** by similarity threshold (≥ 0.72)  
+7. **Same-session fallback** if threshold empties the list (keeps continuity)  
+8. **Deduplicate** near-identical chunks (> 0.95 similarity)  
+9. **MMR** select top-3 diverse results  
+10. **Keyword boost** (PostgreSQL `ILIKE`) merged with vector hits  
+11. **Fetch** session summary + user facts from PostgreSQL  
+12. **Build context** within token budget (default 4096)  
+13. **Call LLM** (or mock) with assembled system prompt + user message  
+14. **Log** token usage and retrieval audit trail  
+15. **BackgroundTasks**: embed turn-pair, extract facts, maybe summarize  
 
 ## Memory Tiers
 
 ### Short-Term Memory
-- **Contents:** Last 6–8 raw messages of current session
-- **Storage:** PostgreSQL `messages` table (where `is_summarized = false`)
-- **Usage:** Every request; provides pronoun resolution and follow-up continuity
-- **Budget:** Up to 1200 tokens
+
+- **Contents:** Last 6–8 raw messages of the current session  
+- **Storage:** PostgreSQL `messages` (`is_summarized = false`)  
+- **Usage:** Every request — pronoun resolution and follow-ups  
+- **Budget:** Up to `SHORT_TERM_MAX_TOKENS` (default 1200)
 
 ### Long-Term Memory (Episodic)
-- **Contents:** Embedded turn-pair chunks from all sessions
-- **Storage:** PostgreSQL `memory_chunks` + Qdrant vectors
-- **Usage:** Retrieved via semantic search when query references past topics
-- **Chunk format:** `User: ...\nAssistant: ...`
+
+- **Contents:** Embedded turn-pair chunks from prior turns  
+- **Storage:** PostgreSQL `memory_chunks` + Qdrant vectors  
+- **Chunk format:** `User: ...\nAssistant: ...`  
+- **Usage:** Semantic search when the query references past topics  
 
 ### Persistent User Facts
-- **Contents:** Structured profile (name, preferences, goals)
-- **Storage:** PostgreSQL `user_facts` table
-- **Usage:** Every request (top 10 by confidence)
-- **Extraction:** LLM-based after each turn; upserted with confidence scoring
+
+- **Contents:** Structured profile (`preferred_language`, `project_goal`, …)  
+- **Storage:** PostgreSQL `user_facts`  
+- **Usage:** Every request (top facts by confidence)  
+- **Extraction:** After each turn (LLM or mock heuristics); upserted with confidence  
 
 ### Conversation Summaries
-- **Contents:** Hierarchical summaries per session
-- **Storage:** PostgreSQL `conversation_summaries` + Qdrant
-- **Trigger:** When unsummarized messages exceed 3000 tokens
-- **Process:** Batch summarize → merge → mark messages as summarized
+
+- **Contents:** Hierarchical summaries per session  
+- **Storage:** PostgreSQL `conversation_summaries` (+ optional vector index)  
+- **Triggers:**  
+  - Unsummarized tokens ≥ `SUMMARIZE_THRESHOLD` (default 3000), **or**  
+  - Unsummarized turns ≥ `SUMMARIZE_TURN_THRESHOLD` (default 10)  
+- **Process:** Batch summarize → merge → mark messages summarized  
 
 ## Retrieval Pipeline
 
 ```
 Query → Embed → Qdrant ANN (top-20)
-  → Temporal Decay (exp(-λ * age_days))
   → Cross-Encoder Rerank
+  → Temporal Decay (exp(-λ * age_days))
   → Threshold Filter (≥ 0.72)
+  → Same-session fallback (if empty)
   → Deduplication (> 0.95 similarity)
   → MMR Selection (top-3)
-  → Keyword Boost (PostgreSQL ILIKE fallback)
+  → Keyword Boost (PostgreSQL ILIKE merge)
 ```
 
-### Similarity Methods
 | Method | Implementation |
-|--------|---------------|
-| Cosine similarity | Qdrant default (L2-normalized BGE vectors) |
-| Cross-encoder reranking | `BAAI/bge-reranker-base` |
-| MMR | λ=0.5 balancing relevance vs diversity |
-| Temporal decay | λ=0.01 per day |
-| Keyword boost | PostgreSQL ILIKE on memory_chunks |
+|--------|----------------|
+| Cosine similarity | Qdrant (L2-normalized BGE vectors) |
+| Cross-encoder reranking | `BAAI/bge-reranker-base` via sentence-transformers |
+| MMR | λ=`MMR_LAMBDA` (default 0.5) |
+| Temporal decay | λ=`TEMPORAL_DECAY_LAMBDA` (default 0.01 / day) |
+| Keyword boost | PostgreSQL `ILIKE` on `memory_chunks` |
+
+Scores below the threshold that still appear in the UI are labeled **fallback** (same-session continuity), not “passed threshold.”
 
 ## Context Construction
 
-Token budget allocation per request:
-
-| Slot | Budget | Source |
-|------|--------|--------|
-| System prompt | ~300 | Fixed |
-| User facts | 150 | PostgreSQL user_facts |
-| Session summary | 400 | conversation_summaries |
+| Slot | Budget (defaults) | Source |
+|------|-------------------|--------|
+| System / overhead | ~300 + separators | Fixed template |
+| User facts | 150 | `user_facts` |
+| Session summary | 400 | `conversation_summaries` |
 | Retrieved memories | 600 | Qdrant top-3 |
 | Short-term messages | 1200 | Recent unsummarized messages |
-| Query + overhead | ~250 | Current message + separators |
-| **Total target** | **~2900** | vs ~5400+ for naive-18 |
+| Query | counted | Current user message |
+| **Total budget** | **4096** | vs naive last-18 baseline |
 
 Assembly order: system → facts → summary → memories → short-term → query.
 
+The API returns `assembled_context_preview` so the dashboard can show exactly what was sent.
+
 ## Database Schema
 
-### PostgreSQL Tables
+### PostgreSQL
 
 | Table | Purpose |
 |-------|---------|
@@ -113,7 +127,7 @@ Assembly order: system → facts → summary → memories → short-term → que
 | `retrieval_logs` | Per-request retrieval audit |
 | `token_usage_logs` | Per-request token metrics |
 
-### Qdrant Collection
+### Qdrant collection
 
 ```json
 {
@@ -123,78 +137,81 @@ Assembly order: system → facts → summary → memories → short-term → que
 }
 ```
 
-## LlamaIndex Integration
+## Frontend
 
-Located in `app/services/llama_index_bridge.py`:
+Vanilla static assets in `frontend/`:
 
-- `configure_llamaindex()` — sets HuggingFace embedding model
-- `get_qdrant_vector_store()` — wraps Qdrant client
-- `index_conversation_chunks()` — batch index via VectorStoreIndex
-- `build_context_chat_engine()` — ContextChatEngine with ChatMemoryBuffer
+| File | Role |
+|------|------|
+| `index.html` | Layout: conversation + stats panels |
+| `styles.css` | Dark dashboard styling |
+| `app.js` | Session init, chat, charts, metrics |
+
+Mounted by FastAPI `StaticFiles` at `/`. No Node/npm required for the tester UI.
+
+## LlamaIndex Bridge (optional)
+
+`app/services/llama_index_bridge.py` wraps:
+
+- HuggingFace embedding configuration  
+- Qdrant vector store helpers  
+- Batch indexing / ContextChatEngine experiments  
+
+Core production path uses the custom hybrid retriever in `app/services/retrieval.py`.
 
 ## Configuration Reference
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `postgresql+asyncpg://...` | PostgreSQL connection |
-| `QDRANT_HOST` | `localhost` | Qdrant host |
-| `QDRANT_PORT` | `6333` | Qdrant port |
-| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Sentence-transformer model |
-| `RERANKER_MODEL` | `BAAI/bge-reranker-base` | Cross-encoder model |
-| `LLM_MOCK` | `false` | Use mock LLM responses |
-| `LLM_BASE_URL` | `http://localhost:11434/v1` | Ollama/OpenAI endpoint |
-| `SIMILARITY_THRESHOLD` | `0.72` | Min retrieval score |
+| `QDRANT_HOST` / `QDRANT_PORT` | `localhost` / `6333` | Qdrant |
+| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Sentence-transformer |
+| `RERANKER_MODEL` | `BAAI/bge-reranker-base` | Cross-encoder |
+| `LLM_MOCK` | `false` | Mock LLM (set `true` for local UI tests) |
+| `LLM_BASE_URL` | `http://localhost:11434/v1` | Ollama / OpenAI-compatible |
+| `SIMILARITY_THRESHOLD` | `0.72` | Min rerank score to keep |
 | `RETRIEVAL_TOP_K` | `3` | Final memories returned |
 | `CONTEXT_TOKEN_BUDGET` | `4096` | Max context tokens |
-| `SHORT_TERM_MAX_TOKENS` | `1200` | Short-term window budget |
-| `SUMMARIZE_THRESHOLD` | `3000` | Tokens before summarization |
-| `API_PORT` | `9200` | API server port |
-| `CORS_ORIGINS` | `http://localhost:5173,...` | Allowed frontend origins |
+| `SHORT_TERM_MAX_TOKENS` | `1200` | Short-term window |
+| `SUMMARIZE_THRESHOLD` | `3000` | Token trigger for summarization |
+| `SUMMARIZE_TURN_THRESHOLD` | `10` | Turn-count trigger |
+| `API_PORT` | `9200` | Suggested uvicorn port (Windows-friendly) |
 
-## Pseudocode: Full Request Handler
+## Pseudocode: Request Handler
 
 ```python
-async def handle_message(user_id, session_id, message):
+async def handle_message(user_id, session_id, message, background_tasks):
     start = time.perf_counter()
 
-    # 1. Persist and load short-term
     save_message(session_id, "user", message)
     short_term = get_short_term_messages(session_id, max_tokens=1200)
 
-    # 2. Semantic retrieval
-    query_embed = embed(message + recent_context)
-    candidates = qdrant.query_points(vector=query_embed, filter=user_id, limit=20)
-    ranked = rerank(message, candidates)
-    filtered = [c for c in ranked if c.score >= 0.72]
-    top_k = mmr_select(filtered, query_embed, k=3)
+    retrieved = await retriever.retrieve(query=message, user_id=user_id, session_id=session_id)
+    retrieved = await retriever.keyword_boost(db, message, retrieved, user_id)
 
-    # 3. Load memory tiers
     summary = get_latest_summary(session_id)
     facts = get_user_facts(user_id, limit=10)
 
-    # 4. Build token-budgeted context
-    context = build_context(facts, summary, top_k, short_term, message)
-
-    # 5. Generate response
+    context = build_context(facts, summary, retrieved, short_term, message)
     response = llm.chat(context.system_prompt, message)
 
-    # 6. Log metrics
     save_message(session_id, "assistant", response)
     log_tokens(context.total_tokens, naive_baseline_18, savings)
-    log_retrieval(top_k, scores)
+    log_retrieval(retrieved, scores)
 
-    # 7. Async: embed, extract facts, summarize
-    background: store_turn_pair, extract_facts, maybe_summarize
+    background_tasks.add_task(store_turn_pair, ...)
+    background_tasks.add_task(extract_facts, ...)
+    background_tasks.add_task(maybe_summarize, ...)
 
-    return ChatResponse(..., latency_ms=elapsed)
+    return ChatResponse(..., assembled_context_preview=..., latency_ms=elapsed)
 ```
 
 ## File Map
 
 | File | Responsibility |
-|------|---------------|
-| `app/main.py` | FastAPI app, CORS, lifespan |
-| `app/config.py` | Settings from .env |
+|------|----------------|
+| `app/main.py` | FastAPI app, CORS, lifespan, static mount |
+| `app/config.py` | Settings from `.env` |
 | `app/schemas.py` | Pydantic request/response models |
 | `app/models/tables.py` | SQLAlchemy ORM models |
 | `app/services/chat.py` | Request orchestration |
@@ -203,8 +220,23 @@ async def handle_message(user_id, session_id, message):
 | `app/services/memory.py` | Tiered memory read/write |
 | `app/services/summarizer.py` | Conversation summarization |
 | `app/services/context_builder.py` | Token-budgeted prompt assembly |
-| `app/services/llm.py` | OpenAI-compatible LLM client |
-| `app/api/routes/chat.py` | POST /chat endpoint |
-| `app/api/routes/sessions.py` | Message/facts/summary reads |
+| `app/services/llm.py` | OpenAI-compatible / mock LLM client |
+| `app/api/routes/chat.py` | `POST /chat` |
+| `app/api/routes/sessions.py` | Message / facts / summary reads |
 | `app/api/routes/metrics.py` | Metrics and evaluation |
-| `frontend/src/` | React testing dashboard |
+| `frontend/` | Vanilla testing dashboard |
+| `scripts/smoke_test.py` | End-to-end API smoke test |
+| `scripts/replay_aria_logs.py` | ARIA log replay + savings report |
+
+## Testing Notes
+
+- Unit/integration: `pytest tests/` (21 tests)  
+- Smoke: `python -m scripts.smoke_test` against a live server on port **9200**  
+- Negative savings on very short mock chats are expected: system overhead can exceed a tiny naive-18 window until conversations grow  
+- On Windows, prefer port **9200** — `8000`/`8080` are often blocked  
+
+## Operational Tips
+
+1. Run `python -m scripts.warmup` once so embedding/reranker models are cached.  
+2. Restart uvicorn after code changes (models stay warm in-process).  
+3. Serve the UI from the **same** uvicorn process that mounts `frontend/` — an old process will 404 static files.  
